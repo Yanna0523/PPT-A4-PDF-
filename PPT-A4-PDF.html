@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>PPT A4 PDF 去白边</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0b0f1a;
+    --card:rgba(255,255,255,.08);
+    --card2:rgba(255,255,255,.10);
+    --border:rgba(255,255,255,.14);
+    --text:rgba(255,255,255,.92);
+    --muted:rgba(255,255,255,.70);
+  }
+  body{
+    margin:0;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    background:var(--bg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;
+    color:var(--text);
+  }
+  .wrap{ width:min(720px, 92vw); padding:22px; }
+  .card{
+    padding:22px;
+    border-radius:18px;
+    background:var(--card);
+    border:1px solid var(--border);
+  }
+  h1{ margin:0 0 10px; font-size:20px; }
+  .tutorial{
+    font-size:14px;
+    line-height:1.65;
+    background:var(--card2);
+    padding:12px;
+    border-radius:12px;
+    margin:12px 0 14px;
+  }
+  label{ display:block; margin-top:12px; font-size:13px; color:var(--muted); }
+  input,button{
+    width:100%;
+    margin-top:8px;
+    padding:12px;
+    border-radius:10px;
+    border:none;
+    font-size:15px;
+    box-sizing:border-box;
+    outline:none;
+  }
+  input{ background:rgba(255,255,255,.14); color:#fff; }
+  .row{ display:flex; gap:10px; }
+  .row>div{ flex:1; }
+  button{
+    margin-top:14px;
+    background:#fff;
+    color:#111;
+    font-weight:800;
+    cursor:pointer;
+  }
+  button:disabled{ opacity:.6; cursor:not-allowed; }
+  .status{
+    margin-top:12px;
+    font-size:13px;
+    color:var(--muted);
+    white-space:pre-wrap;
+  }
+  .note{
+    margin-top:10px;
+    font-size:12px;
+    color:rgba(255,255,255,.62);
+    line-height:1.6;
+  }
+</style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>PPT A4 PDF 去白边</h1>
+
+    <div class="tutorial">
+      使用教程：<br>
+      1) 在做 PPT 的平台：打印 → 另存为 PDF<br>
+      2) 每张打印页数：1；边距：无 → 保存<br>
+      3) 上传 PDF
+    </div>
+
+    <label>上传 PDF</label>
+    <input type="file" id="fileInput" accept="application/pdf" />
+
+    <div class="row">
+      <div>
+        <label>输出文件名（不含 .pdf）</label>
+        <input type="text" id="outName" value="cropped" placeholder="例如：MKT6013_Gr8_cropped" />
+      </div>
+      <div>
+        <label>底部额外微裁（pt）</label>
+        <input type="number" id="bottomExtra" value="4" min="0" max="40" />
+      </div>
+    </div>
+
+    <button id="btn" onclick="run()">处理并下载</button>
+    <div class="status" id="status">就绪</div>
+
+    <div class="note">
+      参数建议：默认即可。若底部仍有极细白缝，把“底部额外微裁”调到 6～10。<br>
+      规则：第 1 页（封面）按“居中裁剪”；第 2 页起按“贴顶裁剪”。
+    </div>
+  </div>
+</div>
+
+<script>
+function setStatus(s){ document.getElementById("status").innerText = s; }
+
+function safeName(name){
+  const cleaned = (name || "cropped").trim().replace(/[\\/:*?"<>|]/g, "_");
+  return cleaned || "cropped";
+}
+
+async function run(){
+  const btn = document.getElementById("btn");
+  try{
+    const file = document.getElementById("fileInput").files[0];
+    if(!file){ alert("请先选择 PDF 文件"); return; }
+
+    btn.disabled = true;
+    setStatus("读取文件中…");
+
+    const outBase = safeName(document.getElementById("outName").value);
+    const bottomExtra = Math.max(0, Number(document.getElementById("bottomExtra").value || 0));
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    setStatus("解析 PDF 并裁剪中…");
+
+    const { PDFDocument } = PDFLib;
+    const pdfDoc = await PDFDocument.load(bytes);
+    const pages = pdfDoc.getPages();
+
+    const targetRatio = 16/9;
+
+    for(let i=0; i<pages.length; i++){
+      const p = pages[i];
+      const pageW = p.getWidth();
+      const pageH = p.getHeight();
+
+      // 以页面宽度为基准，16:9 内容高度
+      const pptH = pageW / targetRatio;
+
+      // 居中裁剪（封面：上下白边）
+      let trim = (pageH - pptH) / 2;
+      trim = Math.max(0, trim);
+      const yCenter = Math.min(pageH-1, trim + bottomExtra);
+      const hCenter = Math.max(1, pptH - bottomExtra);
+
+      // 贴顶裁剪（正文：只剩底部白边）
+      // 贴顶：让 crop 的上边界贴到 pageH
+      // => yTop = pageH - cropH
+      const yTop = Math.max(0, (pageH - pptH) + bottomExtra);
+      const hTop = Math.max(1, pptH - bottomExtra);
+
+      // ✅ 强制规则：第 1 页用居中，其余用贴顶
+      if(i === 0){
+        p.setCropBox(0, yCenter, pageW, hCenter);
+      }else{
+        p.setCropBox(0, yTop, pageW, hTop);
+      }
+
+      if ((i+1) % 5 === 0 || i === pages.length - 1){
+        setStatus(`裁剪进度：${i+1}/${pages.length}`);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+
+    setStatus("生成新 PDF…");
+    const outBytes = await pdfDoc.save();
+
+    const blob = new Blob([outBytes], {type:"application/pdf"});
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${outBase}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setStatus("完成：已开始下载。");
+
+  } catch(e){
+    console.error(e);
+    setStatus("失败：\n" + (e?.message || String(e)));
+    alert("处理失败：请查看页面底部错误信息。");
+  } finally{
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
